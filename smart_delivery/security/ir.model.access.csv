@@ -1,0 +1,13 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_smart_delivery_order_user,smart.delivery.order.user,model_smart_delivery_order,group_smart_delivery_user,1,1,1,0
+access_smart_delivery_order_manager,smart.delivery.order.manager,model_smart_delivery_order,group_smart_delivery_manager,1,1,1,1
+access_smart_driver_user,smart.driver.user,model_smart_driver,group_smart_delivery_user,1,1,1,0
+access_smart_driver_manager,smart.driver.manager,model_smart_driver,group_smart_delivery_manager,1,1,1,1
+access_smart_gps_log_user,smart.gps.log.user,model_smart_gps_log,group_smart_delivery_user,1,1,1,0
+access_smart_gps_log_manager,smart.gps.log.manager,model_smart_gps_log,group_smart_delivery_manager,1,1,1,1
+access_smart_delivery_order_public,smart.delivery.order.public,model_smart_delivery_order,base.group_public,0,0,0,0
+access_smart_driver_public,smart.driver.public,model_smart_driver,base.group_public,0,0,0,0
+access_smart_delivery_event_user,smart.delivery.event.user,model_smart_delivery_event,group_smart_delivery_user,1,0,0,0
+access_smart_delivery_event_manager,smart.delivery.event.manager,model_smart_delivery_event,group_smart_delivery_manager,1,1,1,1
+access_smart_fcm_token_user,smart.fcm.token.user,model_smart_fcm_token,group_smart_delivery_user,1,1,1,0
+access_smart_fcm_token_manager,smart.fcm.token.manager,model_smart_fcm_token,group_smart_delivery_manager,1,1,1,1

@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_smart_delivery_order_tree" model="ir.ui.view">
+        <field name="name">smart.delivery.order.tree</field>
+        <field name="model">smart.delivery.order</field>
+        <field name="arch" type="xml">
+            <tree string="Delivery Orders" decoration-danger="delay_status == 'high_risk'"
+                  decoration-warning="delay_status == 'delayed'"
+                  decoration-success="status == 'delivered'">
+                <field name="name"/>
+                <field name="customer_name"/>
+                <field name="driver_id"/>
+                <field name="status" widget="badge"
+                       decoration-info="status in ('created', 'assigned')"
+                       decoration-warning="status in ('picked_up', 'in_transit')"
+                       decoration-success="status == 'delivered'"/>
+                <field name="eta_minutes"/>
+                <field name="delay_status" widget="badge"
+                       decoration-success="delay_status == 'on_time'"
+                       decoration-warning="delay_status == 'delayed'"
+                       decoration-danger="delay_status == 'high_risk'"/>
+                <field name="risk_score"/>
+                <field name="risk_level"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="view_smart_delivery_order_form" model="ir.ui.view">
+        <field name="name">smart.delivery.order.form</field>
+        <field name="model">smart.delivery.order</field>
+        <field name="arch" type="xml">
+            <form string="Delivery Order">
+                <header>
+                    <field name="status" widget="statusbar"
+                           statusbar_visible="created,assigned,picked_up,in_transit,out_for_delivery,delivered"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="name" readonly="1"/></h1>
+                    </div>
+                    <group>
+                        <group string="Customer">
+                            <field name="customer_name"/>
+                            <field name="customer_phone"/>
+                            <field name="customer_user_id"/>
+                        </group>
+                        <group string="Driver">
+                            <field name="driver_id"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Pickup Location">
+                            <field name="pickup_lat"/>
+                            <field name="pickup_lng"/>
+                        </group>
+                        <group string="Delivery Location">
+                            <field name="delivery_lat"/>
+                            <field name="delivery_lng"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Current Position">
+                            <field name="current_lat"/>
+                            <field name="current_lng"/>
+                            <field name="last_speed"/>
+                            <field name="last_movement_time"/>
+                        </group>
+                        <group string="ETA &amp; Risk">
+                            <field name="eta_minutes"/>
+                            <field name="eta_datetime"/>
+                            <field name="initial_eta_minutes"/>
+                            <field name="traffic_level"/>
+                            <field name="delay_status"/>
+                            <field name="delay_reason"/>
+                            <field name="risk_score"/>
+                            <field name="risk_level"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="GPS Logs" name="gps_logs">
+                            <field name="gps_log_ids">
+                                <tree>
+                                    <field name="timestamp"/>
+                                    <field name="latitude"/>
+                                    <field name="longitude"/>
+                                    <field name="speed"/>
+                                    <field name="driver_id"/>
+                                </tree>
+                            </field>
+                        </page>
+                        <page string="Notifications" name="notifications">
+                            <field name="notification_log" readonly="1"/>
+                        </page>
+                    </notebook>
+                </sheet>
+                <div class="oe_chatter">
+                    <field name="message_follower_ids"/>
+                    <field name="message_ids"/>
+                </div>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_smart_delivery_order_search" model="ir.ui.view">
+        <field name="name">smart.delivery.order.search</field>
+        <field name="model">smart.delivery.order</field>
+        <field name="arch" type="xml">
+            <search string="Search Deliveries">
+                <field name="name"/>
+                <field name="customer_name"/>
+                <field name="driver_id"/>
+                <filter string="On Time" name="on_time" domain="[('delay_status', '=', 'on_time')]"/>
+                <filter string="Delayed" name="delayed" domain="[('delay_status', '=', 'delayed')]"/>
+                <filter string="High Risk" name="high_risk" domain="[('delay_status', '=', 'high_risk')]"/>
+                <separator/>
+                <filter string="In Transit" name="in_transit" domain="[('status', '=', 'in_transit')]"/>
+                <filter string="Delivered" name="delivered" domain="[('status', '=', 'delivered')]"/>
+                <group expand="0" string="Group By">
+                    <filter string="Status" name="group_status" context="{'group_by': 'status'}"/>
+                    <filter string="Driver" name="group_driver" context="{'group_by': 'driver_id'}"/>
+                    <filter string="Delay Status" name="group_delay" context="{'group_by': 'delay_status'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_smart_delivery_order" model="ir.actions.act_window">
+        <field name="name">Delivery Orders</field>
+        <field name="res_model">smart.delivery.order</field>
+        <field name="view_mode">tree,form</field>
+        <field name="search_view_id" ref="view_smart_delivery_order_search"/>
+    </record>
+
+</odoo>

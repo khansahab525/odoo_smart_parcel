@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+
+        <record id="demo_driver_ahmed" model="smart.driver">
+            <field name="name">Ahmed Khan</field>
+            <field name="phone">+92-300-1234567</field>
+            <field name="is_active" eval="True"/>
+            <field name="current_lat">24.8607</field>
+            <field name="current_lng">67.0011</field>
+        </record>
+
+        <record id="demo_delivery_1" model="smart.delivery.order">
+            <field name="name">SDO00001</field>
+            <field name="customer_name">Sara Ali</field>
+            <field name="customer_phone">+92-321-9876543</field>
+            <field name="pickup_lat">24.8607</field>
+            <field name="pickup_lng">67.0011</field>
+            <field name="delivery_lat">24.9207</field>
+            <field name="delivery_lng">67.0651</field>
+            <field name="current_lat">24.8607</field>
+            <field name="current_lng">67.0011</field>
+            <field name="driver_id" ref="demo_driver_ahmed"/>
+            <field name="status">assigned</field>
+        </record>
+
+    </data>
+</odoo>

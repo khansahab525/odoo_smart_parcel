@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_smart_driver_tree" model="ir.ui.view">
+        <field name="name">smart.driver.tree</field>
+        <field name="model">smart.driver</field>
+        <field name="arch" type="xml">
+            <tree string="Drivers">
+                <field name="name"/>
+                <field name="phone"/>
+                <field name="is_active"/>
+                <field name="active_delivery_count"/>
+                <field name="current_lat"/>
+                <field name="current_lng"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="view_smart_driver_form" model="ir.ui.view">
+        <field name="name">smart.driver.form</field>
+        <field name="model">smart.driver</field>
+        <field name="arch" type="xml">
+            <form string="Driver">
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="name"/>
+                            <field name="phone"/>
+                            <field name="is_active"/>
+                            <field name="user_id"/>
+                        </group>
+                        <group>
+                            <field name="current_lat"/>
+                            <field name="current_lng"/>
+                            <field name="active_delivery_count"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Assigned Deliveries" name="deliveries">
+                            <field name="assigned_delivery_ids">
+                                <tree>
+                                    <field name="name"/>
+                                    <field name="customer_name"/>
+                                    <field name="status"/>
+                                    <field name="eta_minutes"/>
+                                    <field name="delay_status"/>
+                                </tree>
+                            </field>
+                        </page>
+                        <page string="GPS Logs" name="gps_logs">
+                            <field name="gps_log_ids">
+                                <tree>
+                                    <field name="timestamp"/>
+                                    <field name="latitude"/>
+                                    <field name="longitude"/>
+                                    <field name="speed"/>
+                                    <field name="delivery_id"/>
+                                </tree>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_smart_driver" model="ir.actions.act_window">
+        <field name="name">Drivers</field>
+        <field name="res_model">smart.driver</field>
+        <field name="view_mode">tree,form</field>
+    </record>
+
+</odoo>
