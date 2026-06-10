@@ -5,8 +5,7 @@
         <field name="name">smart.delivery.order.tree</field>
         <field name="model">smart.delivery.order</field>
         <field name="arch" type="xml">
-            <tree string="Delivery Orders" decoration-danger="delay_status == 'high_risk'"
-                  decoration-warning="delay_status == 'delayed'"
+            <tree string="Delivery Orders"
                   decoration-success="status == 'delivered'">
                 <field name="name"/>
                 <field name="customer_name"/>
@@ -15,13 +14,7 @@
                        decoration-info="status in ('created', 'assigned')"
                        decoration-warning="status in ('picked_up', 'in_transit')"
                        decoration-success="status == 'delivered'"/>
-                <field name="eta_minutes"/>
-                <field name="delay_status" widget="badge"
-                       decoration-success="delay_status == 'on_time'"
-                       decoration-warning="delay_status == 'delayed'"
-                       decoration-danger="delay_status == 'high_risk'"/>
-                <field name="risk_score"/>
-                <field name="risk_level"/>
+                <field name="rating" optional="show"/>
             </tree>
         </field>
     </record>
@@ -51,10 +44,12 @@
                     </group>
                     <group>
                         <group string="Pickup Location">
+                            <field name="pickup_address"/>
                             <field name="pickup_lat"/>
                             <field name="pickup_lng"/>
                         </group>
                         <group string="Delivery Location">
+                            <field name="delivery_address"/>
                             <field name="delivery_lat"/>
                             <field name="delivery_lng"/>
                         </group>
@@ -66,15 +61,10 @@
                             <field name="last_speed"/>
                             <field name="last_movement_time"/>
                         </group>
-                        <group string="ETA &amp; Risk">
-                            <field name="eta_minutes"/>
-                            <field name="eta_datetime"/>
-                            <field name="initial_eta_minutes"/>
-                            <field name="traffic_level"/>
-                            <field name="delay_status"/>
-                            <field name="delay_reason"/>
-                            <field name="risk_score"/>
-                            <field name="risk_level"/>
+                        <group string="Confirmation &amp; Rating">
+                            <field name="confirmation_pin"/>
+                            <field name="rating"/>
+                            <field name="feedback"/>
                         </group>
                     </group>
                     <notebook>
@@ -89,6 +79,19 @@
                                 </tree>
                             </field>
                         </page>
+                        <page string="Proof of Delivery" name="pod">
+                            <group>
+                                <group string="Photo">
+                                    <field name="pod_image" widget="image" nolabel="1"/>
+                                </group>
+                                <group string="Signature">
+                                    <field name="pod_signature" widget="image" nolabel="1"/>
+                                </group>
+                            </group>
+                            <group>
+                                <field name="pod_timestamp"/>
+                            </group>
+                        </page>
                         <page string="Notifications" name="notifications">
                             <field name="notification_log" readonly="1"/>
                         </page>
@@ -102,6 +105,28 @@
         </field>
     </record>
 
+    <record id="view_smart_delivery_order_graph" model="ir.ui.view">
+        <field name="name">smart.delivery.order.graph</field>
+        <field name="model">smart.delivery.order</field>
+        <field name="arch" type="xml">
+            <graph string="Delivery Analysis" type="bar" sample="1">
+                <field name="status"/>
+            </graph>
+        </field>
+    </record>
+
+    <record id="view_smart_delivery_order_pivot" model="ir.ui.view">
+        <field name="name">smart.delivery.order.pivot</field>
+        <field name="model">smart.delivery.order</field>
+        <field name="arch" type="xml">
+            <pivot string="Delivery Statistics" sample="1">
+                <field name="driver_id" type="row"/>
+                <field name="status" type="col"/>
+                <field name="rating" type="measure"/>
+            </pivot>
+        </field>
+    </record>
+
     <record id="view_smart_delivery_order_search" model="ir.ui.view">
         <field name="name">smart.delivery.order.search</field>
         <field name="model">smart.delivery.order</field>
@@ -110,16 +135,17 @@
                 <field name="name"/>
                 <field name="customer_name"/>
                 <field name="driver_id"/>
-                <filter string="On Time" name="on_time" domain="[('delay_status', '=', 'on_time')]"/>
-                <filter string="Delayed" name="delayed" domain="[('delay_status', '=', 'delayed')]"/>
-                <filter string="High Risk" name="high_risk" domain="[('delay_status', '=', 'high_risk')]"/>
                 <separator/>
                 <filter string="In Transit" name="in_transit" domain="[('status', '=', 'in_transit')]"/>
                 <filter string="Delivered" name="delivered" domain="[('status', '=', 'delivered')]"/>
+                <separator/>
+                <filter string="Created Today" name="created_today"
+                        domain="[('create_date', '&gt;=', datetime.datetime.combine(context_today(), datetime.time(0, 0, 0)))]"/>
+                <filter string="Rated" name="rated" domain="[('rating', '&gt;', 0)]"/>
                 <group expand="0" string="Group By">
                     <filter string="Status" name="group_status" context="{'group_by': 'status'}"/>
                     <filter string="Driver" name="group_driver" context="{'group_by': 'driver_id'}"/>
-                    <filter string="Delay Status" name="group_delay" context="{'group_by': 'delay_status'}"/>
+                    <filter string="Creation Date" name="group_create_date" context="{'group_by': 'create_date:day'}"/>
                 </group>
             </search>
         </field>
@@ -128,8 +154,16 @@
     <record id="action_smart_delivery_order" model="ir.actions.act_window">
         <field name="name">Delivery Orders</field>
         <field name="res_model">smart.delivery.order</field>
-        <field name="view_mode">tree,form</field>
+        <field name="view_mode">tree,form,graph,pivot</field>
         <field name="search_view_id" ref="view_smart_delivery_order_search"/>
+    </record>
+
+    <record id="action_smart_delivery_dashboard" model="ir.actions.act_window">
+        <field name="name">Delivery Statistics</field>
+        <field name="res_model">smart.delivery.order</field>
+        <field name="view_mode">graph,pivot</field>
+        <field name="search_view_id" ref="view_smart_delivery_order_search"/>
+        <field name="context">{'search_default_group_status': 1}</field>
     </record>
 
 </odoo>

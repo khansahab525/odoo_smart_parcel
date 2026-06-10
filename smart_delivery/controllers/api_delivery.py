@@ -115,3 +115,54 @@ class ApiDeliveryController(ApiBaseController):
         except Exception as exc:
             _logger.exception('Update status failed')
             return self._json_response(error=str(exc), status=500)
+
+    @http.route(
+        '/api/delivery/<int:delivery_id>/complete',
+        type='http', auth='public', methods=['POST'], csrf=False
+    )
+    def complete_delivery(self, delivery_id, **kwargs):
+        """Complete delivery with confirmation PIN and proof of delivery."""
+        body = self._parse_json_body()
+        service = self._get_delivery_service()
+        delivery = request.env['smart.delivery.order'].sudo().browse(delivery_id)
+        if not delivery.exists():
+            return self._json_response(error='Delivery not found', status=404)
+
+        try:
+            service.complete_delivery(
+                delivery,
+                pin=body.get('pin'),
+                pod_image=body.get('pod_image'),
+                pod_signature=body.get('pod_signature'),
+            )
+            return self._json_response(data=service.serialize_delivery(delivery))
+        except ValueError as exc:
+            return self._json_response(error=str(exc), status=400)
+        except Exception as exc:
+            _logger.exception('Complete delivery failed')
+            return self._json_response(error=str(exc), status=500)
+
+    @http.route(
+        '/api/delivery/<int:delivery_id>/rate',
+        type='http', auth='public', methods=['POST'], csrf=False
+    )
+    def rate_delivery(self, delivery_id, **kwargs):
+        """Submit customer rating and feedback for a delivered order."""
+        body = self._parse_json_body()
+        rating = body.get('rating')
+        if rating is None:
+            return self._json_response(error='rating field required', status=400)
+
+        service = self._get_delivery_service()
+        delivery = request.env['smart.delivery.order'].sudo().browse(delivery_id)
+        if not delivery.exists():
+            return self._json_response(error='Delivery not found', status=404)
+
+        try:
+            service.submit_rating(delivery, rating, feedback=body.get('feedback'))
+            return self._json_response(data=service.serialize_delivery(delivery))
+        except ValueError as exc:
+            return self._json_response(error=str(exc), status=400)
+        except Exception as exc:
+            _logger.exception('Rate delivery failed')
+            return self._json_response(error=str(exc), status=500)

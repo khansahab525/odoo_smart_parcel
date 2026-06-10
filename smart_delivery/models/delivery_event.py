@@ -13,8 +13,6 @@ class SmartDeliveryEvent(models.Model):
     event_type = fields.Selection([
         ('location_update', 'Location Update'),
         ('status_change', 'Status Change'),
-        ('eta_update', 'ETA Update'),
-        ('delay_alert', 'Delay Alert'),
         ('notification', 'Notification'),
     ], string='Event Type', required=True)
     payload = fields.Text(string='Payload (JSON)')

@@ -9,5 +9,3 @@ access_smart_delivery_order_public,smart.delivery.order.public,model_smart_deliv
 access_smart_driver_public,smart.driver.public,model_smart_driver,base.group_public,0,0,0,0
 access_smart_delivery_event_user,smart.delivery.event.user,model_smart_delivery_event,group_smart_delivery_user,1,0,0,0
 access_smart_delivery_event_manager,smart.delivery.event.manager,model_smart_delivery_event,group_smart_delivery_manager,1,1,1,1
-access_smart_fcm_token_user,smart.fcm.token.user,model_smart_fcm_token,group_smart_delivery_user,1,1,1,0
-access_smart_fcm_token_manager,smart.fcm.token.manager,model_smart_fcm_token,group_smart_delivery_manager,1,1,1,1

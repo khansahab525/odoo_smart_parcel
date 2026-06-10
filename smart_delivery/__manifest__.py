@@ -1,14 +1,16 @@
 {
     'name': 'Smart Last Mile Delivery',
-    'version': '17.0.1.0.0',
+    'version': '17.2',
     'category': 'Inventory/Delivery',
-    'summary': 'AI-powered last mile delivery with rule-based ETA and GPS tracking',
+    'summary': 'AI-powered last mile delivery with GPS tracking',
     'description': """
 Smart Last Mile Delivery System
 ================================
 - Order and driver management
-- GPS tracking with rule-based ETA calculation
-- Delay detection and risk scoring (rule-based)
+- GPS tracking with live map updates
+- Proof of delivery (photo + signature) with confirmation PIN
+- Customer ratings and feedback
+- Delivery statistics dashboard
 - OpenAI integration for chatbot and smart notifications
 - REST API for Flutter mobile app
     """,

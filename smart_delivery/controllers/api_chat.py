@@ -34,8 +34,6 @@ class ApiChatController(ApiBaseController):
                 'message': message,
                 'response': response_text,
                 'delivery_status': delivery.status,
-                'eta_minutes': delivery.eta_minutes,
-                'delay_status': delivery.delay_status,
             })
         except Exception as exc:
             _logger.exception('Chat failed')

@@ -68,7 +68,7 @@ def generate_notification(env, event_type, delivery_data):
     """Generate a smart notification message for delivery events."""
     system_prompt = (
         'You are a notification writer for a delivery app. '
-        'Write a short, friendly push notification (max 2 sentences) '
+        'Write a short, friendly notification (max 2 sentences) '
         'based on the event and delivery data provided.'
     )
     user_prompt = (
@@ -85,33 +85,21 @@ def generate_notification(env, event_type, delivery_data):
 
 def _fallback_chat_response(delivery_data):
     """Rule-based fallback when OpenAI is unavailable."""
-    eta = delivery_data.get('eta_minutes', 'unknown')
     status = delivery_data.get('status', 'unknown')
-    delay = delivery_data.get('delay_status', 'on_time')
+    driver = delivery_data.get('driver')
+    driver_name = driver.get('name') if driver else None
 
-    if delay == 'high_risk':
-        return (
-            f"Your order is currently {status}. "
-            f"Estimated arrival is in about {eta} minutes, "
-            f"but there may be significant delays."
-        )
-    if delay == 'delayed':
-        return (
-            f"Your order is {status} and will arrive in approximately {eta} minutes. "
-            f"There is a slight delay."
-        )
-    return (
-        f"Your order is {status} and on track to arrive in about {eta} minutes."
-    )
+    if driver_name:
+        return f"Your order is currently {status}. Your driver is {driver_name}."
+    return f"Your order is currently {status}."
 
 
 def _fallback_notification(event_type, delivery_data):
     """Rule-based fallback notifications."""
     fallbacks = {
         'picked_up': 'Your driver has picked up your order and is on the way!',
-        'in_transit': f"Your delivery is in transit. ETA: {delivery_data.get('eta_minutes', '?')} minutes.",
-        'nearby': 'Your delivery is approximately 10 minutes away!',
-        'delayed': 'Possible delay due to traffic conditions. We apologize for the inconvenience.',
+        'in_transit': 'Your delivery is in transit.',
+        'nearby': 'Your driver is nearby and will arrive shortly!',
         'delivered': 'Your order has been delivered. Thank you for your patience!',
         'assigned': 'A driver has been assigned to your delivery.',
     }

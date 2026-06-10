@@ -5,10 +5,6 @@
             <field name="key">smart_delivery.openai_api_key</field>
             <field name="value"></field>
         </record>
-        <record id="config_fcm_server_key" model="ir.config_parameter">
-            <field name="key">smart_delivery.fcm_server_key</field>
-            <field name="value"></field>
-        </record>
         <record id="config_default_db" model="ir.config_parameter">
             <field name="key">smart_delivery.default_db</field>
             <field name="value">smart_delivery</field>

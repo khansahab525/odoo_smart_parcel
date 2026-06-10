@@ -42,8 +42,6 @@
                                     <field name="name"/>
                                     <field name="customer_name"/>
                                     <field name="status"/>
-                                    <field name="eta_minutes"/>
-                                    <field name="delay_status"/>
                                 </tree>
                             </field>
                         </page>

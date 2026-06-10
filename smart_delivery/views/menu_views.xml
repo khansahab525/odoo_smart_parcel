@@ -23,4 +23,10 @@
               action="action_smart_gps_log"
               sequence="30"/>
 
+    <menuitem id="menu_smart_delivery_dashboard"
+              name="Statistics"
+              parent="menu_smart_delivery_root"
+              action="action_smart_delivery_dashboard"
+              sequence="40"/>
+
 </odoo>

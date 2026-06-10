@@ -1,31 +1,17 @@
 """Business logic service layer for smart delivery operations.
 
-All rule-based ETA, delay detection, and risk scoring lives here.
 Controllers should delegate to this service — never duplicate logic.
 """
 
-from datetime import datetime, timedelta
-
 from odoo import fields
 
-from ..utils.geo_utils import (
-    calculate_eta_datetime,
-    calculate_eta_minutes,
-    determine_traffic_level,
-    haversine_distance,
-)
+from ..utils.geo_utils import haversine_distance
 from ..utils.event_utils import broadcast_event
-from ..utils.fcm_utils import send_to_user
 from ..utils.openai_utils import generate_chat_response, generate_notification
 
 
 class DeliveryService:
     """Service class for delivery business logic."""
-
-    IDLE_THRESHOLD_MINUTES = 12
-    LOW_SPEED_THRESHOLD_KMH = 10
-    ETA_INCREASE_THRESHOLD = 0.30
-    ROUTE_DEVIATION_THRESHOLD_KM = 2.0
 
     def __init__(self, env):
         self.env = env
@@ -44,6 +30,8 @@ class DeliveryService:
             'pickup_lng': data.get('pickup_lng'),
             'delivery_lat': data.get('delivery_lat'),
             'delivery_lng': data.get('delivery_lng'),
+            'pickup_address': data.get('pickup_address'),
+            'delivery_address': data.get('delivery_address'),
             'current_lat': data.get('pickup_lat'),
             'current_lng': data.get('pickup_lng'),
             'customer_user_id': data.get('customer_user_id'),
@@ -52,10 +40,7 @@ class DeliveryService:
             vals['driver_id'] = data['driver_id']
             vals['status'] = 'assigned'
 
-        delivery = Delivery.create(vals)
-        self._recalculate_metrics(delivery)
-        delivery.write({'initial_eta_minutes': delivery.eta_minutes})
-        return delivery
+        return Delivery.create(vals)
 
     def assign_driver(self, delivery, driver_id):
         """Assign a driver to a delivery."""
@@ -81,6 +66,37 @@ class DeliveryService:
             self._send_notification(delivery, event_map[new_status])
 
         self._broadcast_tracking_event(delivery, 'status_change')
+        return delivery
+
+    def complete_delivery(self, delivery, pin=None, pod_image=None, pod_signature=None):
+        """Complete a delivery with PIN verification and proof of delivery."""
+        if delivery.status == 'delivered':
+            raise ValueError('Delivery is already completed')
+
+        if delivery.confirmation_pin and (pin or '').strip() != delivery.confirmation_pin:
+            raise ValueError('Invalid confirmation PIN')
+
+        vals = {'pod_timestamp': fields.Datetime.now()}
+        if pod_image:
+            vals['pod_image'] = pod_image
+        if pod_signature:
+            vals['pod_signature'] = pod_signature
+        delivery.write(vals)
+
+        return self.update_status(delivery, 'delivered')
+
+    def submit_rating(self, delivery, rating, feedback=None):
+        """Store customer rating and feedback for a completed delivery."""
+        rating = int(rating)
+        if rating < 1 or rating > 5:
+            raise ValueError('Rating must be between 1 and 5')
+        if delivery.status != 'delivered':
+            raise ValueError('Only delivered orders can be rated')
+
+        delivery.write({
+            'rating': rating,
+            'feedback': (feedback or '').strip(),
+        })
         return delivery
 
     # ------------------------------------------------------------------
@@ -125,128 +141,8 @@ class DeliveryService:
             'timestamp': now,
         })
 
-        self._recalculate_metrics(delivery)
-
-        if delivery.delay_status in ('delayed', 'high_risk'):
-            self._send_notification(delivery, 'delayed')
-
         self._broadcast_tracking_event(delivery, 'location_update')
         return delivery
-
-    # ------------------------------------------------------------------
-    # ETA calculation (rule-based)
-    # ------------------------------------------------------------------
-
-    def calculate_eta(self, delivery):
-        """Calculate ETA using Haversine distance and rule-based speed."""
-        if not delivery.current_lat or not delivery.current_lng:
-            lat = delivery.pickup_lat
-            lng = delivery.pickup_lng
-        else:
-            lat = delivery.current_lat
-            lng = delivery.current_lng
-
-        distance = haversine_distance(
-            lat, lng, delivery.delivery_lat, delivery.delivery_lng
-        )
-        traffic = delivery.traffic_level or determine_traffic_level(delivery.last_speed)
-        eta_minutes = calculate_eta_minutes(distance, traffic)
-        eta_dt = calculate_eta_datetime(eta_minutes)
-
-        return {
-            'eta_minutes': eta_minutes,
-            'eta_datetime': eta_dt,
-            'distance_km': round(distance, 2),
-            'traffic_level': traffic,
-        }
-
-    # ------------------------------------------------------------------
-    # Delay detection (rule-based)
-    # ------------------------------------------------------------------
-
-    def detect_delay(self, delivery):
-        """Detect delay status using rule-based heuristics."""
-        reasons = []
-        status = 'on_time'
-        now = fields.Datetime.now()
-
-        if delivery.last_movement_time:
-            idle_minutes = (now - delivery.last_movement_time).total_seconds() / 60
-            if idle_minutes >= self.IDLE_THRESHOLD_MINUTES:
-                reasons.append(f'No movement for {int(idle_minutes)} minutes')
-                status = 'delayed'
-
-        if delivery.last_speed is not None and delivery.last_speed < self.LOW_SPEED_THRESHOLD_KMH:
-            if delivery.status in ('in_transit', 'out_for_delivery'):
-                reasons.append(f'Low speed ({delivery.last_speed:.0f} km/h) — traffic delay')
-                status = 'delayed'
-
-        eta_data = self.calculate_eta(delivery)
-        if delivery.initial_eta_minutes and delivery.initial_eta_minutes > 0:
-            increase = (eta_data['eta_minutes'] - delivery.initial_eta_minutes) / delivery.initial_eta_minutes
-            if increase >= self.ETA_INCREASE_THRESHOLD:
-                reasons.append(f'ETA increased by {int(increase * 100)}%')
-                status = 'high_risk'
-
-        return {
-            'delay_status': status,
-            'delay_reason': '; '.join(reasons) if reasons else '',
-        }
-
-    # ------------------------------------------------------------------
-    # Risk scoring (rule-based)
-    # ------------------------------------------------------------------
-
-    def calculate_risk_score(self, delivery):
-        """Calculate risk score 0-100 based on rule-based factors."""
-        score = 0
-        now = fields.Datetime.now()
-
-        if delivery.last_movement_time:
-            idle_minutes = (now - delivery.last_movement_time).total_seconds() / 60
-            if idle_minutes >= 15:
-                score += 35
-            elif idle_minutes >= 10:
-                score += 20
-            elif idle_minutes >= 5:
-                score += 10
-
-        if delivery.last_speed is not None:
-            if delivery.last_speed < 5:
-                score += 25
-            elif delivery.last_speed < 10:
-                score += 15
-            elif delivery.last_speed < 20:
-                score += 5
-
-        deviation = self._calculate_route_deviation(delivery)
-        if deviation > self.ROUTE_DEVIATION_THRESHOLD_KM:
-            score += 30
-        elif deviation > 1.0:
-            score += 15
-
-        traffic = delivery.traffic_level or 'medium'
-        traffic_scores = {'low': 0, 'medium': 10, 'high': 20}
-        score += traffic_scores.get(traffic, 10)
-
-        if delivery.initial_eta_minutes and delivery.initial_eta_minutes > 0:
-            eta_data = self.calculate_eta(delivery)
-            increase = (eta_data['eta_minutes'] - delivery.initial_eta_minutes) / delivery.initial_eta_minutes
-            if increase >= 0.5:
-                score += 20
-            elif increase >= 0.3:
-                score += 10
-
-        score = min(100, max(0, score))
-
-        if score >= 60:
-            risk_level = 'high'
-        elif score >= 30:
-            risk_level = 'medium'
-        else:
-            risk_level = 'low'
-
-        return {'risk_score': score, 'risk_level': risk_level}
 
     # ------------------------------------------------------------------
     # Chat & notifications (OpenAI)
@@ -304,13 +200,12 @@ class DeliveryService:
                 'current_lat': self._optional_float(driver.current_lat),
                 'current_lng': self._optional_float(driver.current_lng),
             } if driver else None,
-            'eta_minutes': self._safe_int(delivery.eta_minutes),
-            'eta_datetime': str(delivery.eta_datetime) if delivery.eta_datetime else None,
-            'delay_status': delivery.delay_status or 'on_time',
-            'delay_reason': delivery.delay_reason or '',
-            'risk_score': self._safe_int(delivery.risk_score),
-            'risk_level': delivery.risk_level or 'low',
-            'traffic_level': delivery.traffic_level or 'medium',
+            'pickup_address': delivery.pickup_address or '',
+            'delivery_address': delivery.delivery_address or '',
+            'confirmation_pin': delivery.confirmation_pin or '',
+            'has_pod': bool(delivery.pod_image or delivery.pod_signature),
+            'rating': delivery.rating or None,
+            'feedback': delivery.feedback or '',
         }
 
     def serialize_driver(self, driver):
@@ -329,22 +224,6 @@ class DeliveryService:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _recalculate_metrics(self, delivery):
-        """Recalculate ETA, delay, and risk for a delivery."""
-        eta_data = self.calculate_eta(delivery)
-        delay_data = self.detect_delay(delivery)
-        risk_data = self.calculate_risk_score(delivery)
-
-        delivery.write({
-            'eta_minutes': eta_data['eta_minutes'],
-            'eta_datetime': eta_data['eta_datetime'],
-            'traffic_level': eta_data['traffic_level'],
-            'delay_status': delay_data['delay_status'],
-            'delay_reason': delay_data['delay_reason'],
-            'risk_score': risk_data['risk_score'],
-            'risk_level': risk_data['risk_level'],
-        })
-
     def _detect_movement(self, delivery, new_lat, new_lng):
         """Check if driver has moved significantly (>50 meters)."""
         if not delivery.current_lat or not delivery.current_lng:
@@ -354,27 +233,6 @@ class DeliveryService:
         ) * 1000
         return distance_m > 50
 
-    def _calculate_route_deviation(self, delivery):
-        """Estimate route deviation from direct path (rule-based)."""
-        if not delivery.current_lat or not delivery.current_lng:
-            return 0.0
-
-        direct = haversine_distance(
-            delivery.pickup_lat, delivery.pickup_lng,
-            delivery.delivery_lat, delivery.delivery_lng,
-        )
-        via_current = (
-            haversine_distance(
-                delivery.pickup_lat, delivery.pickup_lng,
-                delivery.current_lat, delivery.current_lng,
-            )
-            + haversine_distance(
-                delivery.current_lat, delivery.current_lng,
-                delivery.delivery_lat, delivery.delivery_lng,
-            )
-        )
-        return max(0, via_current - direct)
-
     def _send_notification(self, delivery, event_type):
         """Generate and log a smart notification."""
         message = self.get_notification(delivery, event_type)
@@ -383,7 +241,6 @@ class DeliveryService:
             'notification_log': (delivery.notification_log or '') + log_entry,
         })
 
-        self._push_fcm(delivery, event_type, message)
         broadcast_event(self.env, delivery, 'notification', {
             'event_type': event_type,
             'message': message,
@@ -399,25 +256,4 @@ class DeliveryService:
                 'latitude': delivery.current_lat,
                 'longitude': delivery.current_lng,
             },
-        })
-
-    def _push_fcm(self, delivery, event_type, message):
-        """Send FCM push to customer user if registered."""
-        user_id = delivery.customer_user_id.id
-        if not user_id:
-            return
-
-        titles = {
-            'assigned': 'Driver Assigned',
-            'picked_up': 'Order Picked Up',
-            'in_transit': 'Order In Transit',
-            'nearby': 'Driver Nearby',
-            'delivered': 'Order Delivered',
-            'delayed': 'Delivery Delay',
-        }
-        title = titles.get(event_type, 'Delivery Update')
-        send_to_user(self.env, user_id, title, message, {
-            'delivery_id': str(delivery.id),
-            'event_type': event_type,
-            'eta_minutes': str(delivery.eta_minutes or 0),
         })
