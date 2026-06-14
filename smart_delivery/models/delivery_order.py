@@ -58,6 +58,14 @@ class SmartDeliveryOrder(models.Model):
     gps_log_ids = fields.One2many('smart.gps.log', 'delivery_id', string='GPS Logs')
     notification_log = fields.Text(string='Notification Log')
 
+    @api.onchange('driver_id')
+    def _onchange_driver_id(self):
+        """Reflect assignment immediately in the Odoo form status bar."""
+        if self.driver_id and self.status == 'created':
+            self.status = 'assigned'
+        elif not self.driver_id and self.status == 'assigned':
+            self.status = 'created'
+
     @api.model_create_multi
     def create(self, vals_list):
         for vals in vals_list:
@@ -67,7 +75,53 @@ class SmartDeliveryOrder(models.Model):
                 ) or 'New'
             if not vals.get('confirmation_pin'):
                 vals['confirmation_pin'] = f'{random.randint(0, 9999):04d}'
+            if vals.get('driver_id') and vals.get('status', 'created') == 'created':
+                vals['status'] = 'assigned'
         return super().create(vals_list)
+
+    def write(self, vals):
+        """Auto-update status when a driver is assigned or removed from the UI."""
+        notify_orders = self.env['smart.delivery.order']
+        if 'driver_id' in vals and 'status' not in vals:
+            if len(self) == 1:
+                self._apply_driver_status_vals(vals)
+                if vals.get('driver_id') and self.status == 'created' and not self.driver_id:
+                    notify_orders = self
+            else:
+                result = True
+                for order in self:
+                    order_vals = dict(vals)
+                    if order._apply_driver_status_vals(order_vals):
+                        notify_orders |= order
+                    result = result and super(
+                        SmartDeliveryOrder, order
+                    ).write(order_vals)
+                if notify_orders:
+                    self._notify_driver_assigned(notify_orders)
+                return result
+
+        res = super().write(vals)
+        if notify_orders:
+            self._notify_driver_assigned(notify_orders)
+        return res
+
+    def _apply_driver_status_vals(self, vals):
+        """Set status in vals when driver assignment changes. Returns True if newly assigned."""
+        self.ensure_one()
+        new_driver = vals.get('driver_id')
+        if new_driver and self.status == 'created':
+            vals['status'] = 'assigned'
+            return not self.driver_id
+        if not new_driver and self.status == 'assigned':
+            vals['status'] = 'created'
+        return False
+
+    def _notify_driver_assigned(self, orders):
+        from ..services.delivery_service import DeliveryService
+        service = DeliveryService(self.env)
+        for order in orders:
+            if order.driver_id and order.status == 'assigned':
+                service._send_notification(order, 'assigned')
 
     def copy(self, default=None):
         """Duplicate as a fresh order with new reference, PIN, and no POD data."""
