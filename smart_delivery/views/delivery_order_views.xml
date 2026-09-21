@@ -10,6 +10,11 @@
                 <field name="name"/>
                 <field name="customer_name"/>
                 <field name="driver_id"/>
+                <field name="assignment_method" optional="show"/>
+                <field name="parcel_size" optional="show"/>
+                <field name="scheduled_at" optional="show"/>
+                <field name="estimated_price" widget="monetary" optional="show"/>
+                <field name="currency_id" column_invisible="True"/>
                 <field name="status" widget="badge"
                        decoration-info="status in ('created', 'assigned')"
                        decoration-warning="status in ('picked_up', 'in_transit')"
@@ -25,13 +30,24 @@
         <field name="arch" type="xml">
             <form string="Delivery Order">
                 <header>
+                    <button name="action_broadcast_nearby" type="object"
+                            string="Find Nearby Drivers" class="btn-primary"
+                            invisible="status not in ('created', 'finding_driver', 'awaiting_acceptance')"/>
+                    <button name="action_send_driver_offer" type="object"
+                            string="Send Driver Offer"
+                            invisible="not requested_driver_id or status not in ('created', 'finding_driver', 'awaiting_acceptance')"/>
+                    <button name="action_force_assign_driver" type="object"
+                            string="Force Assign"
+                            confirm="Assign this driver without acceptance?"
+                            invisible="not requested_driver_id or status not in ('created', 'finding_driver', 'awaiting_acceptance', 'assigned')"/>
                     <field name="status" widget="statusbar"
-                           statusbar_visible="created,assigned,picked_up,in_transit,out_for_delivery,delivered"/>
+                           statusbar_visible="created,finding_driver,awaiting_acceptance,assigned,picked_up,in_transit,out_for_delivery,delivered"/>
                 </header>
                 <sheet>
                     <div class="oe_title">
                         <h1><field name="name" readonly="1"/></h1>
                     </div>
+                    <field name="currency_id" invisible="1"/>
                     <group>
                         <group string="Customer">
                             <field name="customer_name"/>
@@ -39,7 +55,11 @@
                             <field name="customer_user_id"/>
                         </group>
                         <group string="Driver">
-                            <field name="driver_id"/>
+                            <field name="requested_driver_id"
+                                   invisible="status not in ('created', 'finding_driver', 'awaiting_acceptance', 'assigned')"/>
+                            <field name="driver_id" readonly="1"/>
+                            <field name="assignment_method" readonly="1"/>
+                            <field name="assignment_accepted_at" readonly="1"/>
                         </group>
                     </group>
                     <group>
@@ -53,6 +73,23 @@
                             <field name="delivery_lat"/>
                             <field name="delivery_lng"/>
                         </group>
+                    </group>
+                    <group>
+                        <group string="Parcel Details">
+                            <field name="parcel_size"/>
+                            <field name="parcel_weight_kg"/>
+                            <field name="parcel_description"/>
+                            <field name="is_fragile"/>
+                        </group>
+                        <group string="Schedule &amp; Estimate">
+                            <field name="scheduled_at"/>
+                            <field name="estimated_distance_km"/>
+                            <field name="estimated_price" widget="monetary"/>
+                        </group>
+                    </group>
+                    <group string="Delivery Instructions">
+                        <field name="delivery_notes" nolabel="1"
+                               placeholder="Gate code, landmark, handling notes, or other instructions..."/>
                     </group>
                     <group>
                         <group string="Current Position">
@@ -95,6 +132,21 @@
                         <page string="Notifications" name="notifications">
                             <field name="notification_log" readonly="1"/>
                         </page>
+                        <page string="Driver Offers" name="driver_offers">
+                            <field name="offer_ids" readonly="1">
+                                <tree decoration-success="status == 'accepted'"
+                                      decoration-danger="status == 'rejected'"
+                                      decoration-muted="status in ('expired', 'cancelled')">
+                                    <field name="driver_id"/>
+                                    <field name="source"/>
+                                    <field name="distance_km"/>
+                                    <field name="status" widget="badge"/>
+                                    <field name="offered_at"/>
+                                    <field name="expires_at"/>
+                                    <field name="responded_at"/>
+                                </tree>
+                            </field>
+                        </page>
                     </notebook>
                 </sheet>
                 <div class="oe_chatter">
@@ -135,9 +187,17 @@
                 <field name="name"/>
                 <field name="customer_name"/>
                 <field name="driver_id"/>
+                <field name="parcel_size"/>
+                <field name="scheduled_at"/>
                 <separator/>
                 <filter string="In Transit" name="in_transit" domain="[('status', '=', 'in_transit')]"/>
+                <filter string="Needs Driver" name="needs_driver"
+                        domain="[('status', 'in', ('created', 'finding_driver', 'awaiting_acceptance'))]"/>
                 <filter string="Delivered" name="delivered" domain="[('status', '=', 'delivered')]"/>
+                <filter string="Scheduled" name="scheduled"
+                        domain="[('scheduled_at', '!=', False)]"/>
+                <filter string="Fragile" name="fragile"
+                        domain="[('is_fragile', '=', True)]"/>
                 <separator/>
                 <filter string="Created Today" name="created_today"
                         domain="[('create_date', '&gt;=', datetime.datetime.combine(context_today(), datetime.time(0, 0, 0)))]"/>
@@ -145,6 +205,10 @@
                 <group expand="0" string="Group By">
                     <filter string="Status" name="group_status" context="{'group_by': 'status'}"/>
                     <filter string="Driver" name="group_driver" context="{'group_by': 'driver_id'}"/>
+                    <filter string="Parcel Size" name="group_parcel_size"
+                            context="{'group_by': 'parcel_size'}"/>
+                    <filter string="Scheduled Date" name="group_scheduled_at"
+                            context="{'group_by': 'scheduled_at:day'}"/>
                     <filter string="Creation Date" name="group_create_date" context="{'group_by': 'create_date:day'}"/>
                 </group>
             </search>

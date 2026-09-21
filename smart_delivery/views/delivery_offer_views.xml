@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_smart_delivery_offer_tree" model="ir.ui.view">
+        <field name="name">smart.delivery.offer.tree</field>
+        <field name="model">smart.delivery.offer</field>
+        <field name="arch" type="xml">
+            <tree string="Driver Offers"
+                  decoration-success="status == 'accepted'"
+                  decoration-danger="status == 'rejected'"
+                  decoration-muted="status in ('expired', 'cancelled')">
+                <field name="delivery_id"/>
+                <field name="driver_id"/>
+                <field name="source"/>
+                <field name="distance_km"/>
+                <field name="status" widget="badge"/>
+                <field name="offered_at"/>
+                <field name="expires_at"/>
+                <field name="responded_at"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="view_smart_delivery_offer_form" model="ir.ui.view">
+        <field name="name">smart.delivery.offer.form</field>
+        <field name="model">smart.delivery.offer</field>
+        <field name="arch" type="xml">
+            <form string="Driver Offer">
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="delivery_id"/>
+                            <field name="driver_id"/>
+                            <field name="source"/>
+                            <field name="distance_km"/>
+                        </group>
+                        <group>
+                            <field name="status"/>
+                            <field name="offered_at"/>
+                            <field name="expires_at"/>
+                            <field name="responded_at"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_smart_delivery_offer_search" model="ir.ui.view">
+        <field name="name">smart.delivery.offer.search</field>
+        <field name="model">smart.delivery.offer</field>
+        <field name="arch" type="xml">
+            <search string="Search Driver Offers">
+                <field name="delivery_id"/>
+                <field name="driver_id"/>
+                <filter string="Pending" name="pending"
+                        domain="[('status', '=', 'pending')]"/>
+                <filter string="Accepted" name="accepted"
+                        domain="[('status', '=', 'accepted')]"/>
+                <group expand="0" string="Group By">
+                    <filter string="Status" name="group_status"
+                            context="{'group_by': 'status'}"/>
+                    <filter string="Driver" name="group_driver"
+                            context="{'group_by': 'driver_id'}"/>
+                    <filter string="Source" name="group_source"
+                            context="{'group_by': 'source'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_smart_delivery_offer" model="ir.actions.act_window">
+        <field name="name">Driver Offers</field>
+        <field name="res_model">smart.delivery.offer</field>
+        <field name="view_mode">tree,form</field>
+        <field name="search_view_id" ref="view_smart_delivery_offer_search"/>
+        <field name="context">{'search_default_pending': 1}</field>
+    </record>
+
+</odoo>

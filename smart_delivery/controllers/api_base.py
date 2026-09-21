@@ -81,13 +81,14 @@ class ApiBaseController(http.Controller):
         user = request.env['res.users'].sudo().browse(int(user_id))
         return user if user.exists() else None
 
-    def _serialize_user(self, user, db=None):
+    def _serialize_user(self, user):
         """Serialize user for API login response."""
         return {
             'user_id': user.id,
             'name': user.name,
             'login': user.login,
             'role': user.smart_delivery_role or 'customer',
-            'db': db,
             'driver_id': user.smart_driver_id.id if user.smart_driver_id else None,
+            'phone': user.smart_customer_phone or '',
+            'email': user.email or '',
         }

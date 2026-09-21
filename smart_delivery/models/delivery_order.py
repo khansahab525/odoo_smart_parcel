@@ -1,6 +1,7 @@
 import random
 
 from odoo import api, fields, models
+from odoo.exceptions import UserError, ValidationError
 
 
 class SmartDeliveryOrder(models.Model):
@@ -27,8 +28,31 @@ class SmartDeliveryOrder(models.Model):
     current_lng = fields.Float(string='Current Longitude', digits=(10, 7))
 
     driver_id = fields.Many2one('smart.driver', string='Driver', tracking=True)
+    requested_driver_id = fields.Many2one(
+        'smart.driver',
+        string='Driver to Offer',
+        domain=[('is_active', '=', True)],
+        tracking=True,
+    )
+    assignment_method = fields.Selection([
+        ('preferred', 'Customer Preferred'),
+        ('nearby', 'Nearby Broadcast'),
+        ('admin', 'Admin Offer'),
+        ('forced', 'Admin Forced'),
+    ], string='Assignment Method', readonly=True, tracking=True)
+    assignment_accepted_at = fields.Datetime(
+        string='Assignment Accepted At', readonly=True, copy=False
+    )
+    offer_ids = fields.One2many(
+        'smart.delivery.offer',
+        'delivery_id',
+        string='Driver Offers',
+        copy=False,
+    )
     status = fields.Selection([
         ('created', 'Created'),
+        ('finding_driver', 'Finding Driver'),
+        ('awaiting_acceptance', 'Awaiting Acceptance'),
         ('assigned', 'Assigned'),
         ('picked_up', 'Picked Up'),
         ('in_transit', 'In Transit'),
@@ -42,6 +66,34 @@ class SmartDeliveryOrder(models.Model):
 
     pickup_address = fields.Char(string='Pickup Address')
     delivery_address = fields.Char(string='Delivery Address')
+
+    parcel_size = fields.Selection([
+        ('document', 'Document'),
+        ('small', 'Small Parcel'),
+        ('medium', 'Medium Box'),
+        ('large', 'Large Parcel'),
+    ], string='Parcel Size', default='small', required=True, tracking=True)
+    parcel_weight_kg = fields.Float(
+        string='Weight (kg)', default=1.0, required=True, tracking=True
+    )
+    parcel_description = fields.Char(string='Parcel Contents')
+    is_fragile = fields.Boolean(string='Fragile', tracking=True)
+    delivery_notes = fields.Text(string='Delivery Instructions')
+    scheduled_at = fields.Datetime(
+        string='Scheduled Delivery', tracking=True,
+        help='Leave empty for the earliest available pickup.'
+    )
+    estimated_distance_km = fields.Float(
+        string='Estimated Distance (km)', digits=(10, 2), readonly=True
+    )
+    estimated_price = fields.Monetary(
+        string='Estimated Price', currency_field='currency_id',
+        readonly=True, tracking=True
+    )
+    currency_id = fields.Many2one(
+        'res.currency', string='Currency', required=True,
+        default=lambda self: self.env.company.currency_id
+    )
 
     confirmation_pin = fields.Char(
         string='Confirmation PIN', readonly=True, copy=False,
@@ -57,6 +109,14 @@ class SmartDeliveryOrder(models.Model):
 
     gps_log_ids = fields.One2many('smart.gps.log', 'delivery_id', string='GPS Logs')
     notification_log = fields.Text(string='Notification Log')
+
+    @api.constrains('parcel_weight_kg')
+    def _check_parcel_weight(self):
+        for order in self:
+            if order.parcel_weight_kg <= 0 or order.parcel_weight_kg > 100:
+                raise ValidationError(
+                    'Parcel weight must be greater than 0 and no more than 100 kg.'
+                )
 
     @api.onchange('driver_id')
     def _onchange_driver_id(self):
@@ -75,7 +135,11 @@ class SmartDeliveryOrder(models.Model):
                 ) or 'New'
             if not vals.get('confirmation_pin'):
                 vals['confirmation_pin'] = f'{random.randint(0, 9999):04d}'
-            if vals.get('driver_id') and vals.get('status', 'created') == 'created':
+            if (
+                vals.get('driver_id')
+                and vals.get('status', 'created')
+                in ('created', 'finding_driver', 'awaiting_acceptance')
+            ):
                 vals['status'] = 'assigned'
         return super().create(vals_list)
 
@@ -109,12 +173,48 @@ class SmartDeliveryOrder(models.Model):
         """Set status in vals when driver assignment changes. Returns True if newly assigned."""
         self.ensure_one()
         new_driver = vals.get('driver_id')
-        if new_driver and self.status == 'created':
+        if new_driver and self.status in (
+            'created', 'finding_driver', 'awaiting_acceptance'
+        ):
             vals['status'] = 'assigned'
             return not self.driver_id
         if not new_driver and self.status == 'assigned':
             vals['status'] = 'created'
         return False
+
+    def action_send_driver_offer(self):
+        from ..services.delivery_service import DeliveryService
+        service = DeliveryService(self.env)
+        for order in self:
+            if not order.requested_driver_id:
+                raise UserError('Select an active driver before sending an offer.')
+            service.offer_driver(
+                order,
+                order.requested_driver_id,
+                source='admin',
+            )
+        return True
+
+    def action_broadcast_nearby(self):
+        from ..services.delivery_service import DeliveryService
+        service = DeliveryService(self.env)
+        for order in self:
+            service.broadcast_to_nearby_drivers(order)
+        return True
+
+    def action_force_assign_driver(self):
+        from ..services.delivery_service import DeliveryService
+        service = DeliveryService(self.env)
+        for order in self:
+            if not order.requested_driver_id:
+                raise UserError('Select an active driver before forcing assignment.')
+            service.force_assign_driver(order, order.requested_driver_id)
+        return True
+
+    @api.model
+    def _cron_expire_delivery_offers(self):
+        from ..services.delivery_service import DeliveryService
+        DeliveryService(self.env).expire_pending_offers()
 
     def _notify_driver_assigned(self, orders):
         from ..services.delivery_service import DeliveryService
@@ -143,5 +243,8 @@ class SmartDeliveryOrder(models.Model):
             'last_movement_time': False,
             'last_speed': 0,
             'driver_id': False,
+            'requested_driver_id': False,
+            'assignment_method': False,
+            'assignment_accepted_at': False,
         })
         return super().copy(default)

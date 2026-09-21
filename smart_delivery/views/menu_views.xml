@@ -17,6 +17,12 @@
               action="action_smart_driver"
               sequence="20"/>
 
+    <menuitem id="menu_smart_delivery_offers"
+              name="Driver Offers"
+              parent="menu_smart_delivery_root"
+              action="action_smart_delivery_offer"
+              sequence="25"/>
+
     <menuitem id="menu_smart_delivery_gps_logs"
               name="GPS Logs"
               parent="menu_smart_delivery_root"

@@ -1,12 +1,14 @@
 {
     'name': 'Smart Last Mile Delivery',
-    'version': '17.2',
+    'version': '17.3',
     'category': 'Inventory/Delivery',
     'summary': 'AI-powered last mile delivery with GPS tracking',
     'description': """
 Smart Last Mile Delivery System
 ================================
 - Order and driver management
+- Parcel details, delivery scheduling, instructions, and fare estimates
+- Secure customer self-registration for the mobile app
 - GPS tracking with live map updates
 - Proof of delivery (photo + signature) with confirmation PIN
 - Customer ratings and feedback
@@ -16,12 +18,14 @@ Smart Last Mile Delivery System
     """,
     'author': 'FYP Project',
     'website': 'https://www.example.com',
-    'depends': ['base', 'mail'],
+    'depends': ['base', 'mail', 'auth_signup'],
     'data': [
         'security/security.xml',
         'security/ir.model.access.csv',
+        'data/delivery_offer_cron.xml',
         'views/driver_views.xml',
         'views/delivery_order_views.xml',
+        'views/delivery_offer_views.xml',
         'views/gps_log_views.xml',
         'views/res_users_views.xml',
         'views/menu_views.xml',

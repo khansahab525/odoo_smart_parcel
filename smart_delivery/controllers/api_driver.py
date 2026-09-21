@@ -10,6 +10,36 @@ _logger = logging.getLogger(__name__)
 
 class ApiDriverController(ApiBaseController):
 
+    def _driver_from_user_id(self, user_id):
+        user = self._get_user_by_id(user_id)
+        if not user or user.smart_delivery_role != 'driver':
+            raise ValueError('A valid driver user_id is required')
+        if not user.smart_driver_id:
+            raise ValueError('No driver profile is linked to this user')
+        return user.smart_driver_id.sudo()
+
+    @http.route(
+        '/api/drivers/available',
+        type='http', auth='public', methods=['GET'], csrf=False
+    )
+    def available_drivers(self, **kwargs):
+        service = self._get_delivery_service()
+        try:
+            pickup_lat = kwargs.get('pickup_lat')
+            pickup_lng = kwargs.get('pickup_lng')
+            drivers = service.get_available_drivers(
+                search=kwargs.get('search'),
+                pickup_lat=(
+                    float(pickup_lat) if pickup_lat is not None else None
+                ),
+                pickup_lng=(
+                    float(pickup_lng) if pickup_lng is not None else None
+                ),
+            )
+            return self._json_response(data=drivers)
+        except ValueError as exc:
+            return self._json_response(error=str(exc), status=400)
+
     @http.route('/api/driver/create', type='http', auth='public', methods=['POST'], csrf=False)
     def create_driver(self, **kwargs):
         body = self._parse_json_body()
@@ -47,6 +77,11 @@ class ApiDriverController(ApiBaseController):
 
         service = self._get_delivery_service()
         try:
+            authenticated_driver = self._driver_from_user_id(
+                body.get('user_id')
+            )
+            if authenticated_driver.id != int(body['driver_id']):
+                raise ValueError('Driver identity does not match user_id')
             delivery = service.update_driver_location(
                 driver_id=int(body['driver_id']),
                 delivery_id=int(body['delivery_id']),
@@ -59,6 +94,88 @@ class ApiDriverController(ApiBaseController):
             return self._json_response(error=str(exc), status=404)
         except Exception as exc:
             _logger.exception('Location update failed')
+            return self._json_response(error=str(exc), status=500)
+
+    @http.route(
+        '/api/driver/availability/location',
+        type='http', auth='public', methods=['POST'], csrf=False
+    )
+    def update_availability_location(self, **kwargs):
+        body = self._parse_json_body()
+        try:
+            driver = self._driver_from_user_id(body.get('user_id'))
+            service = self._get_delivery_service()
+            service.update_driver_availability_location(
+                driver,
+                latitude=float(body.get('latitude')),
+                longitude=float(body.get('longitude')),
+            )
+            return self._json_response(
+                data=service.serialize_driver(driver)
+            )
+        except (TypeError, ValueError) as exc:
+            return self._json_response(error=str(exc), status=400)
+        except Exception as exc:
+            _logger.exception('Driver availability location update failed')
+            return self._json_response(error=str(exc), status=500)
+
+    @http.route(
+        '/api/driver/offers',
+        type='http', auth='public', methods=['GET'], csrf=False
+    )
+    def list_offers(self, **kwargs):
+        try:
+            driver = self._driver_from_user_id(kwargs.get('user_id'))
+            service = self._get_delivery_service()
+            offers = service.get_driver_offers(driver)
+            return self._json_response(data=[
+                service.serialize_offer(offer) for offer in offers
+            ])
+        except ValueError as exc:
+            return self._json_response(error=str(exc), status=400)
+
+    @http.route(
+        '/api/driver/offers/<int:offer_id>/accept',
+        type='http', auth='public', methods=['POST'], csrf=False
+    )
+    def accept_offer(self, offer_id, **kwargs):
+        body = self._parse_json_body()
+        try:
+            driver = self._driver_from_user_id(body.get('user_id'))
+            offer = request.env['smart.delivery.offer'].sudo().browse(offer_id)
+            if not offer.exists():
+                return self._json_response(error='Offer not found', status=404)
+            service = self._get_delivery_service()
+            delivery = service.accept_offer(offer, driver)
+            return self._json_response(
+                data=service.serialize_delivery(delivery)
+            )
+        except ValueError as exc:
+            return self._json_response(error=str(exc), status=409)
+        except Exception as exc:
+            _logger.exception('Driver offer acceptance failed')
+            return self._json_response(error=str(exc), status=500)
+
+    @http.route(
+        '/api/driver/offers/<int:offer_id>/reject',
+        type='http', auth='public', methods=['POST'], csrf=False
+    )
+    def reject_offer(self, offer_id, **kwargs):
+        body = self._parse_json_body()
+        try:
+            driver = self._driver_from_user_id(body.get('user_id'))
+            offer = request.env['smart.delivery.offer'].sudo().browse(offer_id)
+            if not offer.exists():
+                return self._json_response(error='Offer not found', status=404)
+            service = self._get_delivery_service()
+            delivery = service.reject_offer(offer, driver)
+            return self._json_response(
+                data=service.serialize_delivery(delivery)
+            )
+        except ValueError as exc:
+            return self._json_response(error=str(exc), status=409)
+        except Exception as exc:
+            _logger.exception('Driver offer rejection failed')
             return self._json_response(error=str(exc), status=500)
 
     @http.route('/api/driver/<int:driver_id>', type='http', auth='public', methods=['GET'], csrf=False)

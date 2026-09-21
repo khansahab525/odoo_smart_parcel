@@ -10,6 +10,16 @@ _logger = logging.getLogger(__name__)
 
 class ApiDeliveryController(ApiBaseController):
 
+    def _validate_driver_access(self, body, delivery):
+        user = self._get_user_by_id(body.get('user_id'))
+        if (
+            not user
+            or user.smart_delivery_role != 'driver'
+            or not user.smart_driver_id
+            or delivery.driver_id != user.smart_driver_id
+        ):
+            raise ValueError('This delivery is not assigned to this driver')
+
     @http.route('/api/delivery/create', type='http', auth='public', methods=['POST'], csrf=False)
     def create_delivery(self, **kwargs):
         body = self._parse_json_body()
@@ -26,11 +36,11 @@ class ApiDeliveryController(ApiBaseController):
             if body.get('customer_user_id'):
                 body['customer_user_id'] = int(body['customer_user_id'])
             delivery = service.create_delivery(body)
-            if body.get('driver_id'):
-                service.assign_driver(delivery, body['driver_id'])
             return self._json_response(
                 data=service.serialize_delivery(delivery), status=201
             )
+        except ValueError as exc:
+            return self._json_response(error=str(exc), status=400)
         except Exception as exc:
             _logger.exception('Create delivery failed')
             return self._json_response(error=str(exc), status=500)
@@ -46,6 +56,7 @@ class ApiDeliveryController(ApiBaseController):
     @http.route('/api/delivery/list', type='http', auth='public', methods=['GET'], csrf=False)
     def list_deliveries(self, **kwargs):
         service = self._get_delivery_service()
+        service.expire_pending_offers()
         user_id = kwargs.get('user_id')
         domain = []
 
@@ -101,7 +112,8 @@ class ApiDeliveryController(ApiBaseController):
             return self._json_response(error='Delivery not found', status=404)
 
         valid_statuses = [
-            'created', 'assigned', 'picked_up', 'in_transit',
+            'created', 'finding_driver', 'awaiting_acceptance',
+            'assigned', 'picked_up', 'in_transit',
             'out_for_delivery', 'delivered', 'cancelled',
         ]
         if new_status not in valid_statuses:
@@ -110,8 +122,11 @@ class ApiDeliveryController(ApiBaseController):
             )
 
         try:
+            self._validate_driver_access(body, delivery)
             service.update_status(delivery, new_status)
             return self._json_response(data=service.serialize_delivery(delivery))
+        except ValueError as exc:
+            return self._json_response(error=str(exc), status=403)
         except Exception as exc:
             _logger.exception('Update status failed')
             return self._json_response(error=str(exc), status=500)
@@ -129,6 +144,7 @@ class ApiDeliveryController(ApiBaseController):
             return self._json_response(error='Delivery not found', status=404)
 
         try:
+            self._validate_driver_access(body, delivery)
             service.complete_delivery(
                 delivery,
                 pin=body.get('pin'),

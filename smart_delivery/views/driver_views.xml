@@ -12,6 +12,7 @@
                 <field name="active_delivery_count"/>
                 <field name="current_lat"/>
                 <field name="current_lng"/>
+                <field name="last_location_time"/>
             </tree>
         </field>
     </record>
@@ -32,6 +33,7 @@
                         <group>
                             <field name="current_lat"/>
                             <field name="current_lng"/>
+                            <field name="last_location_time"/>
                             <field name="active_delivery_count"/>
                         </group>
                     </group>
@@ -53,6 +55,17 @@
                                     <field name="longitude"/>
                                     <field name="speed"/>
                                     <field name="delivery_id"/>
+                                </tree>
+                            </field>
+                        </page>
+                        <page string="Delivery Offers" name="offers">
+                            <field name="offer_ids" readonly="1">
+                                <tree>
+                                    <field name="delivery_id"/>
+                                    <field name="source"/>
+                                    <field name="distance_km"/>
+                                    <field name="status"/>
+                                    <field name="expires_at"/>
                                 </tree>
                             </field>
                         </page>

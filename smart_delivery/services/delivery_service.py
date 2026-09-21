@@ -3,6 +3,8 @@
 Controllers should delegate to this service — never duplicate logic.
 """
 
+from datetime import datetime, timedelta, timezone
+
 from odoo import fields
 
 from ..utils.geo_utils import haversine_distance
@@ -23,33 +25,338 @@ class DeliveryService:
     def create_delivery(self, data):
         """Create a new delivery order."""
         Delivery = self.env['smart.delivery.order'].sudo()
+        parcel_size = data.get('parcel_size') or 'small'
+        valid_sizes = {'document', 'small', 'medium', 'large'}
+        if parcel_size not in valid_sizes:
+            raise ValueError(
+                f'Invalid parcel_size. Must be one of: {sorted(valid_sizes)}'
+            )
+
+        weight_kg = self._required_float(
+            data.get('parcel_weight_kg', 1.0), 'parcel_weight_kg'
+        )
+        if weight_kg <= 0 or weight_kg > 100:
+            raise ValueError(
+                'parcel_weight_kg must be greater than 0 and no more than 100'
+            )
+
+        pickup_lat = self._required_float(data.get('pickup_lat'), 'pickup_lat')
+        pickup_lng = self._required_float(data.get('pickup_lng'), 'pickup_lng')
+        delivery_lat = self._required_float(
+            data.get('delivery_lat'), 'delivery_lat'
+        )
+        delivery_lng = self._required_float(
+            data.get('delivery_lng'), 'delivery_lng'
+        )
+        is_fragile = data.get('is_fragile') is True
+        distance_km = haversine_distance(
+            pickup_lat, pickup_lng, delivery_lat, delivery_lng
+        )
+        estimated_price = self._calculate_estimated_price(
+            distance_km, parcel_size, weight_kg, is_fragile
+        )
+        scheduled_at = self._parse_scheduled_at(data.get('scheduled_at'))
+
         vals = {
             'customer_name': data.get('customer_name'),
             'customer_phone': data.get('customer_phone'),
-            'pickup_lat': data.get('pickup_lat'),
-            'pickup_lng': data.get('pickup_lng'),
-            'delivery_lat': data.get('delivery_lat'),
-            'delivery_lng': data.get('delivery_lng'),
+            'pickup_lat': pickup_lat,
+            'pickup_lng': pickup_lng,
+            'delivery_lat': delivery_lat,
+            'delivery_lng': delivery_lng,
             'pickup_address': data.get('pickup_address'),
             'delivery_address': data.get('delivery_address'),
-            'current_lat': data.get('pickup_lat'),
-            'current_lng': data.get('pickup_lng'),
+            'current_lat': pickup_lat,
+            'current_lng': pickup_lng,
             'customer_user_id': data.get('customer_user_id'),
+            'parcel_size': parcel_size,
+            'parcel_weight_kg': weight_kg,
+            'parcel_description': (data.get('parcel_description') or '').strip(),
+            'is_fragile': is_fragile,
+            'delivery_notes': (data.get('delivery_notes') or '').strip(),
+            'scheduled_at': scheduled_at,
+            'estimated_distance_km': round(distance_km, 2),
+            'estimated_price': estimated_price,
         }
+        delivery = Delivery.create(vals)
+
         if data.get('driver_id'):
-            vals['driver_id'] = data['driver_id']
-            vals['status'] = 'assigned'
+            driver = self.env['smart.driver'].sudo().browse(
+                int(data['driver_id'])
+            )
+            self.force_assign_driver(delivery, driver)
+        elif data.get('preferred_driver_id'):
+            driver = self.env['smart.driver'].sudo().browse(
+                int(data['preferred_driver_id'])
+            )
+            self.offer_driver(delivery, driver, source='preferred')
+        else:
+            self.broadcast_to_nearby_drivers(delivery)
 
-        return Delivery.create(vals)
+        return delivery
 
-    def assign_driver(self, delivery, driver_id):
-        """Assign a driver to a delivery."""
+    def _required_float(self, value, field_name):
+        try:
+            return float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f'{field_name} must be a number') from exc
+
+    def _parse_scheduled_at(self, value):
+        if not value:
+            return False
+        try:
+            parsed = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        except ValueError as exc:
+            raise ValueError('scheduled_at must be a valid ISO-8601 date') from exc
+
+        if parsed.tzinfo:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        if parsed <= fields.Datetime.now():
+            raise ValueError('scheduled_at must be in the future')
+        return parsed
+
+    def _calculate_estimated_price(
+        self, distance_km, parcel_size, weight_kg, is_fragile
+    ):
+        size_surcharges = {
+            'document': 0.0,
+            'small': 1.5,
+            'medium': 3.0,
+            'large': 6.0,
+        }
+        extra_weight_fee = max(0.0, weight_kg - 2.0) * 0.45
+        fragile_fee = 2.0 if is_fragile else 0.0
+        price = (
+            4.5
+            + (distance_km * 1.2)
+            + size_surcharges[parcel_size]
+            + extra_weight_fee
+            + fragile_fee
+        )
+        return round(price, 2)
+
+    def get_available_drivers(
+        self, search=None, pickup_lat=None, pickup_lng=None
+    ):
+        online_cutoff = fields.Datetime.now() - timedelta(minutes=2)
+        domain = [
+            ('is_active', '=', True),
+            ('last_location_time', '>=', online_cutoff),
+        ]
+        if search:
+            domain.append(('name', 'ilike', search.strip()))
+
+        drivers = self.env['smart.driver'].sudo().search(
+            domain, order='name asc', limit=30
+        )
+        drivers = drivers.sorted(
+            key=lambda driver: (driver.active_delivery_count, driver.name or '')
+        )
+        result = []
+        for driver in drivers:
+            distance_km = None
+            if (
+                pickup_lat is not None
+                and pickup_lng is not None
+                and driver.current_lat
+                and driver.current_lng
+            ):
+                distance_km = haversine_distance(
+                    float(pickup_lat),
+                    float(pickup_lng),
+                    driver.current_lat,
+                    driver.current_lng,
+                )
+            result.append(self.serialize_driver(driver, distance_km=distance_km))
+        return result
+
+    def offer_driver(self, delivery, driver, source='admin', distance_km=None):
+        if not driver.exists() or not driver.is_active:
+            raise ValueError('Selected driver is not active')
+        if delivery.driver_id or delivery.status not in (
+            'created', 'finding_driver', 'awaiting_acceptance'
+        ):
+            raise ValueError('This delivery can no longer receive driver offers')
+
+        Offer = self.env['smart.delivery.offer'].sudo()
+        if source in ('preferred', 'admin'):
+            delivery.offer_ids.filtered(
+                lambda item: item.status == 'pending'
+            ).write({
+                'status': 'cancelled',
+                'responded_at': fields.Datetime.now(),
+            })
+
+        now = fields.Datetime.now()
+        expires_at = now + timedelta(seconds=60)
+        vals = {
+            'source': source,
+            'status': 'pending',
+            'distance_km': distance_km or 0.0,
+            'offered_at': now,
+            'expires_at': expires_at,
+            'responded_at': False,
+        }
+        offer = Offer.create({
+            **vals,
+            'delivery_id': delivery.id,
+            'driver_id': driver.id,
+        })
+
         delivery.write({
-            'driver_id': driver_id,
+            'status': 'awaiting_acceptance',
+            'requested_driver_id': (
+                driver.id if source in ('preferred', 'admin') else False
+            ),
+            'assignment_method': source,
+        })
+        return offer
+
+    def broadcast_to_nearby_drivers(self, delivery, radius_km=1.0):
+        if delivery.driver_id:
+            raise ValueError('This delivery already has a driver')
+
+        delivery.offer_ids.filtered(
+            lambda item: item.status == 'pending'
+        ).write({
+            'status': 'cancelled',
+            'responded_at': fields.Datetime.now(),
+        })
+
+        online_cutoff = fields.Datetime.now() - timedelta(minutes=2)
+        drivers = self.env['smart.driver'].sudo().search([
+            ('is_active', '=', True),
+            ('last_location_time', '>=', online_cutoff),
+            ('current_lat', '!=', 0),
+            ('current_lng', '!=', 0),
+        ])
+        offers = self.env['smart.delivery.offer'].sudo()
+        for driver in drivers:
+            distance_km = haversine_distance(
+                delivery.pickup_lat,
+                delivery.pickup_lng,
+                driver.current_lat,
+                driver.current_lng,
+            )
+            if distance_km <= radius_km:
+                offers |= self.offer_driver(
+                    delivery,
+                    driver,
+                    source='nearby',
+                    distance_km=distance_km,
+                )
+
+        if not offers:
+            delivery.write({
+                'status': 'finding_driver',
+                'assignment_method': 'nearby',
+                'requested_driver_id': False,
+            })
+        return offers
+
+    def expire_pending_offers(self):
+        now = fields.Datetime.now()
+        Offer = self.env['smart.delivery.offer'].sudo()
+        expired = Offer.search([
+            ('status', '=', 'pending'),
+            ('expires_at', '<=', now),
+        ])
+        deliveries = expired.mapped('delivery_id')
+        if expired:
+            expired.write({'status': 'expired', 'responded_at': now})
+        for delivery in deliveries.filtered(lambda order: not order.driver_id):
+            if not delivery.offer_ids.filtered(
+                lambda item: item.status == 'pending'
+            ):
+                delivery.write({'status': 'finding_driver'})
+        return expired
+
+    def get_driver_offers(self, driver):
+        self.expire_pending_offers()
+        return self.env['smart.delivery.offer'].sudo().search([
+            ('driver_id', '=', driver.id),
+            ('status', '=', 'pending'),
+            ('expires_at', '>', fields.Datetime.now()),
+        ], order='offered_at desc')
+
+    def accept_offer(self, offer, driver):
+        self.expire_pending_offers()
+        self.env.cr.execute(
+            'SELECT id FROM smart_delivery_order WHERE id = %s FOR UPDATE',
+            [offer.delivery_id.id],
+        )
+        offer.invalidate_recordset()
+        delivery = offer.delivery_id
+        delivery.invalidate_recordset(['driver_id', 'status'])
+
+        if offer.driver_id != driver:
+            raise ValueError('This offer does not belong to this driver')
+        if offer.status != 'pending' or offer.expires_at <= fields.Datetime.now():
+            raise ValueError('This delivery offer has expired')
+        if delivery.driver_id or delivery.status not in (
+            'created', 'finding_driver', 'awaiting_acceptance'
+        ):
+            raise ValueError('This delivery has already been assigned')
+
+        now = fields.Datetime.now()
+        offer.write({'status': 'accepted', 'responded_at': now})
+        delivery.offer_ids.filtered(
+            lambda item: item.id != offer.id and item.status == 'pending'
+        ).write({'status': 'cancelled', 'responded_at': now})
+        delivery.write({
+            'driver_id': driver.id,
             'status': 'assigned',
+            'requested_driver_id': False,
+            'assignment_method': offer.source,
+            'assignment_accepted_at': now,
         })
         self._send_notification(delivery, 'assigned')
+        self._broadcast_tracking_event(delivery, 'driver_assigned')
         return delivery
+
+    def reject_offer(self, offer, driver):
+        self.expire_pending_offers()
+        if offer.driver_id != driver:
+            raise ValueError('This offer does not belong to this driver')
+        if offer.status != 'pending':
+            raise ValueError('This offer is no longer pending')
+
+        offer.write({
+            'status': 'rejected',
+            'responded_at': fields.Datetime.now(),
+        })
+        delivery = offer.delivery_id
+        if (
+            not delivery.driver_id
+            and not delivery.offer_ids.filtered(
+                lambda item: item.status == 'pending'
+            )
+        ):
+            delivery.write({'status': 'finding_driver'})
+        return delivery
+
+    def force_assign_driver(self, delivery, driver):
+        if not driver.exists() or not driver.is_active:
+            raise ValueError('Selected driver is not active')
+        now = fields.Datetime.now()
+        delivery.offer_ids.filtered(
+            lambda item: item.status == 'pending'
+        ).write({'status': 'cancelled', 'responded_at': now})
+        delivery.write({
+            'driver_id': driver.id,
+            'status': 'assigned',
+            'requested_driver_id': False,
+            'assignment_method': 'forced',
+            'assignment_accepted_at': now,
+        })
+        self._send_notification(delivery, 'assigned')
+        self._broadcast_tracking_event(delivery, 'driver_assigned')
+        return delivery
+
+    def assign_driver(self, delivery, driver_id):
+        """Backward-compatible forced assignment."""
+        driver = self.env['smart.driver'].sudo().browse(int(driver_id))
+        return self.force_assign_driver(delivery, driver)
 
     def update_status(self, delivery, new_status):
         """Update delivery status and trigger notifications."""
@@ -116,10 +423,16 @@ class DeliveryService:
         delivery = Delivery.browse(delivery_id)
         if not delivery.exists():
             raise ValueError('Delivery not found')
+        if delivery.driver_id != driver:
+            raise ValueError('This delivery is not assigned to this driver')
 
         now = fields.Datetime.now()
 
-        driver.write({'current_lat': latitude, 'current_lng': longitude})
+        driver.write({
+            'current_lat': latitude,
+            'current_lng': longitude,
+            'last_location_time': now,
+        })
 
         movement_detected = self._detect_movement(delivery, latitude, longitude)
         update_vals = {
@@ -143,6 +456,18 @@ class DeliveryService:
 
         self._broadcast_tracking_event(delivery, 'location_update')
         return delivery
+
+    def update_driver_availability_location(
+        self, driver, latitude, longitude
+    ):
+        if not driver.exists() or not driver.is_active:
+            raise ValueError('Driver is not active')
+        driver.write({
+            'current_lat': float(latitude),
+            'current_lng': float(longitude),
+            'last_location_time': fields.Datetime.now(),
+        })
+        return driver
 
     # ------------------------------------------------------------------
     # Chat & notifications (OpenAI)
@@ -178,15 +503,31 @@ class DeliveryService:
             return None
         return float(value)
 
+    def _optional_positive_float(self, value):
+        number = self._optional_float(value)
+        return number if number is not None and number > 0 else None
+
     def serialize_delivery(self, delivery):
         """Serialize delivery record to API-friendly dict."""
         driver = delivery.driver_id
+        pending_offers = delivery.offer_ids.filtered(
+            lambda item: item.status == 'pending'
+        )
+        next_expiry = min(
+            pending_offers.mapped('expires_at'),
+            default=None,
+        )
         return {
             'id': delivery.id,
             'name': delivery.name or '',
             'customer_name': delivery.customer_name or '',
             'customer_phone': delivery.customer_phone or '',
             'status': delivery.status or 'created',
+            'assignment_method': delivery.assignment_method or None,
+            'pending_offer_count': len(pending_offers),
+            'offer_expires_at': (
+                f'{next_expiry.isoformat()}Z' if next_expiry else None
+            ),
             'pickup_lat': self._safe_float(delivery.pickup_lat),
             'pickup_lng': self._safe_float(delivery.pickup_lng),
             'delivery_lat': self._safe_float(delivery.delivery_lat),
@@ -202,13 +543,29 @@ class DeliveryService:
             } if driver else None,
             'pickup_address': delivery.pickup_address or '',
             'delivery_address': delivery.delivery_address or '',
+            'parcel_size': delivery.parcel_size or 'small',
+            'parcel_weight_kg': self._safe_float(delivery.parcel_weight_kg),
+            'parcel_description': delivery.parcel_description or '',
+            'is_fragile': bool(delivery.is_fragile),
+            'delivery_notes': delivery.delivery_notes or '',
+            'scheduled_at': (
+                f'{delivery.scheduled_at.isoformat()}Z'
+                if delivery.scheduled_at else None
+            ),
+            'estimated_distance_km': self._optional_positive_float(
+                delivery.estimated_distance_km
+            ),
+            'estimated_price': self._optional_positive_float(
+                delivery.estimated_price
+            ),
+            'currency': delivery.currency_id.name or '',
             'confirmation_pin': delivery.confirmation_pin or '',
             'has_pod': bool(delivery.pod_image or delivery.pod_signature),
             'rating': delivery.rating or None,
             'feedback': delivery.feedback or '',
         }
 
-    def serialize_driver(self, driver):
+    def serialize_driver(self, driver, distance_km=None):
         """Serialize driver record to API-friendly dict."""
         return {
             'id': driver.id,
@@ -217,7 +574,25 @@ class DeliveryService:
             'is_active': driver.is_active,
             'current_lat': driver.current_lat,
             'current_lng': driver.current_lng,
+            'last_location_time': (
+                f'{driver.last_location_time.isoformat()}Z'
+                if driver.last_location_time else None
+            ),
+            'distance_km': (
+                round(distance_km, 2) if distance_km is not None else None
+            ),
             'active_delivery_count': driver.active_delivery_count,
+        }
+
+    def serialize_offer(self, offer):
+        return {
+            'id': offer.id,
+            'source': offer.source,
+            'status': offer.status,
+            'distance_km': self._optional_float(offer.distance_km),
+            'offered_at': f'{offer.offered_at.isoformat()}Z',
+            'expires_at': f'{offer.expires_at.isoformat()}Z',
+            'delivery': self.serialize_delivery(offer.delivery_id),
         }
 
     # ------------------------------------------------------------------
