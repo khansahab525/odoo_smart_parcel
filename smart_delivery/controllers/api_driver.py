@@ -1,4 +1,5 @@
 import logging
+import time
 
 from odoo import http
 from odoo.http import request
@@ -120,6 +121,29 @@ class ApiDriverController(ApiBaseController):
             return self._json_response(error=str(exc), status=500)
 
     @http.route(
+        '/api/driver/availability',
+        type='http', auth='public', methods=['POST'], csrf=False
+    )
+    def set_availability(self, **kwargs):
+        body = self._parse_json_body()
+        if not isinstance(body.get('connected'), bool):
+            return self._json_response(
+                error='connected must be true or false', status=400
+            )
+        try:
+            driver = self._driver_from_user_id(body.get('user_id'))
+            service = self._get_delivery_service()
+            service.set_driver_connection(driver, body['connected'])
+            return self._json_response(
+                data=service.serialize_driver(driver)
+            )
+        except ValueError as exc:
+            return self._json_response(error=str(exc), status=400)
+        except Exception as exc:
+            _logger.exception('Driver availability update failed')
+            return self._json_response(error=str(exc), status=500)
+
+    @http.route(
         '/api/driver/offers',
         type='http', auth='public', methods=['GET'], csrf=False
     )
@@ -133,6 +157,52 @@ class ApiDriverController(ApiBaseController):
             ])
         except ValueError as exc:
             return self._json_response(error=str(exc), status=400)
+
+    @http.route(
+        '/api/driver/offers/poll',
+        type='http', auth='public', methods=['GET'], csrf=False
+    )
+    def poll_offers(self, **kwargs):
+        """Wait for the driver's pending offer set to change."""
+        try:
+            driver = self._driver_from_user_id(kwargs.get('user_id'))
+            known_ids = {
+                int(value)
+                for value in (kwargs.get('known_offer_ids') or '').split(',')
+                if value.strip().isdigit()
+            }
+            wait_seconds = min(
+                max(int(kwargs.get('timeout', 25)), 1),
+                30,
+            )
+            service = self._get_delivery_service()
+            start = time.time()
+
+            while time.time() - start < wait_seconds:
+                offers = service.get_driver_offers(driver)
+                current_ids = set(offers.ids)
+                if current_ids != known_ids:
+                    return self._json_response(data={
+                        'changed': True,
+                        'offers': [
+                            service.serialize_offer(offer)
+                            for offer in offers
+                        ],
+                    })
+                time.sleep(1)
+
+            offers = service.get_driver_offers(driver)
+            return self._json_response(data={
+                'changed': set(offers.ids) != known_ids,
+                'offers': [
+                    service.serialize_offer(offer) for offer in offers
+                ],
+            })
+        except ValueError as exc:
+            return self._json_response(error=str(exc), status=400)
+        except Exception as exc:
+            _logger.exception('Driver offer polling failed')
+            return self._json_response(error=str(exc), status=500)
 
     @http.route(
         '/api/driver/offers/<int:offer_id>/accept',

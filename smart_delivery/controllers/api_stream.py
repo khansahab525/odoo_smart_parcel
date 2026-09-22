@@ -34,6 +34,7 @@ class ApiStreamController(ApiBaseController):
             service = self._get_delivery_service()
             timeout = 120
             start = time.time()
+            last_heartbeat = 0
 
             yield 'data: {"type":"connected","delivery_id":%d}\n\n' % delivery_id
 
@@ -53,7 +54,7 @@ class ApiStreamController(ApiBaseController):
                         yield 'data: %s\n\n' % json.dumps(payload, default=str)
                         last_event_id = event.id
                     mark_events_consumed(request.env, events.ids)
-                else:
+                elif time.time() - last_heartbeat >= 15:
                     delivery.invalidate_recordset()
                     snapshot = service.serialize_delivery(delivery)
                     heartbeat = {
@@ -61,8 +62,9 @@ class ApiStreamController(ApiBaseController):
                         'delivery': snapshot,
                     }
                     yield 'data: %s\n\n' % json.dumps(heartbeat, default=str)
+                    last_heartbeat = time.time()
 
-                time.sleep(3)
+                time.sleep(2)
 
             yield 'data: {"type":"stream_end"}\n\n'
 

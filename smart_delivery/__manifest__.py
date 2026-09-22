@@ -1,6 +1,6 @@
 {
     'name': 'Smart Last Mile Delivery',
-    'version': '17.3',
+    'version': '17.4',
     'category': 'Inventory/Delivery',
     'summary': 'AI-powered last mile delivery with GPS tracking',
     'description': """

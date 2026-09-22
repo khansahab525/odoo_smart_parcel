@@ -1,4 +1,5 @@
 import logging
+import time
 
 from odoo import http
 from odoo.http import request
@@ -10,6 +11,40 @@ _logger = logging.getLogger(__name__)
 
 class ApiDeliveryController(ApiBaseController):
 
+    def _delivery_domain_for_user(self, user_id):
+        if not user_id:
+            return []
+        user = self._get_user_by_id(user_id)
+        if not user:
+            raise ValueError('User not found')
+
+        role = user.smart_delivery_role or 'customer'
+        is_admin = role == 'admin' or user.has_group('base.group_system')
+        if is_admin:
+            return []
+        if role == 'driver':
+            return (
+                [('driver_id', '=', user.smart_driver_id.id)]
+                if user.smart_driver_id else [('id', '=', 0)]
+            )
+        if role == 'customer':
+            if user.smart_customer_phone:
+                return [
+                    '|',
+                    ('customer_user_id', '=', user.id),
+                    ('customer_phone', '=', user.smart_customer_phone),
+                ]
+            return [('customer_user_id', '=', user.id)]
+        return []
+
+    @staticmethod
+    def _delivery_state_signature(deliveries):
+        return ','.join(
+            f'{delivery.id}:{delivery.status}:'
+            f'{delivery.driver_id.id if delivery.driver_id else 0}'
+            for delivery in deliveries
+        )
+
     def _validate_driver_access(self, body, delivery):
         user = self._get_user_by_id(body.get('user_id'))
         if (
@@ -19,6 +54,23 @@ class ApiDeliveryController(ApiBaseController):
             or delivery.driver_id != user.smart_driver_id
         ):
             raise ValueError('This delivery is not assigned to this driver')
+
+    def _validate_customer_access(self, body, delivery):
+        user = self._get_user_by_id(body.get('user_id'))
+        owns_delivery = user and (
+            delivery.customer_user_id == user
+            or (
+                not delivery.customer_user_id
+                and user.smart_customer_phone
+                and delivery.customer_phone == user.smart_customer_phone
+            )
+        )
+        if (
+            not user
+            or user.smart_delivery_role != 'customer'
+            or not owns_delivery
+        ):
+            raise ValueError('This order does not belong to this customer')
 
     @http.route('/api/delivery/create', type='http', auth='public', methods=['POST'], csrf=False)
     def create_delivery(self, **kwargs):
@@ -58,34 +110,10 @@ class ApiDeliveryController(ApiBaseController):
         service = self._get_delivery_service()
         service.expire_pending_offers()
         user_id = kwargs.get('user_id')
-        domain = []
-
-        if user_id:
-            user = self._get_user_by_id(user_id)
-            if not user:
-                return self._json_response(error='User not found', status=404)
-
-            role = user.smart_delivery_role or 'customer'
-            is_admin = role == 'admin' or user.has_group('base.group_system')
-
-            if is_admin:
-                domain = []
-            elif role == 'driver':
-                if user.smart_driver_id:
-                    domain = [('driver_id', '=', user.smart_driver_id.id)]
-                else:
-                    domain = [('id', '=', 0)]
-            elif role == 'customer':
-                clauses = [('customer_user_id', '=', user.id)]
-                if user.smart_customer_phone:
-                    clauses = [
-                        '|',
-                        ('customer_user_id', '=', user.id),
-                        ('customer_phone', '=', user.smart_customer_phone),
-                    ]
-                domain = clauses
-            else:
-                domain = []
+        try:
+            domain = self._delivery_domain_for_user(user_id)
+        except ValueError as exc:
+            return self._json_response(error=str(exc), status=404)
 
         status_filter = kwargs.get('status')
         if status_filter:
@@ -95,6 +123,49 @@ class ApiDeliveryController(ApiBaseController):
         return self._json_response(data=[
             service.serialize_delivery(d) for d in deliveries
         ])
+
+    @http.route(
+        '/api/delivery/list/poll',
+        type='http', auth='public', methods=['GET'], csrf=False
+    )
+    def poll_delivery_list(self, **kwargs):
+        """Wait until order status, assignment, or list membership changes."""
+        try:
+            domain = self._delivery_domain_for_user(kwargs.get('user_id'))
+            known_state = kwargs.get('known_state') or ''
+            wait_seconds = min(
+                max(int(kwargs.get('timeout', 25)), 1),
+                30,
+            )
+            service = self._get_delivery_service()
+            start = time.time()
+
+            while time.time() - start < wait_seconds:
+                service.expire_pending_offers()
+                deliveries = request.env[
+                    'smart.delivery.order'
+                ].sudo().search(domain)
+                state = self._delivery_state_signature(deliveries)
+                if state != known_state:
+                    return self._json_response(data={
+                        'changed': True,
+                        'state': state,
+                        'deliveries': [
+                            service.serialize_delivery(delivery)
+                            for delivery in deliveries
+                        ],
+                    })
+                time.sleep(2)
+
+            return self._json_response(data={
+                'changed': False,
+                'state': known_state,
+            })
+        except ValueError as exc:
+            return self._json_response(error=str(exc), status=400)
+        except Exception as exc:
+            _logger.exception('Delivery list polling failed')
+            return self._json_response(error=str(exc), status=500)
 
     @http.route(
         '/api/delivery/<int:delivery_id>/status',
@@ -156,6 +227,29 @@ class ApiDeliveryController(ApiBaseController):
             return self._json_response(error=str(exc), status=400)
         except Exception as exc:
             _logger.exception('Complete delivery failed')
+            return self._json_response(error=str(exc), status=500)
+
+    @http.route(
+        '/api/delivery/<int:delivery_id>/cancel',
+        type='http', auth='public', methods=['POST'], csrf=False
+    )
+    def cancel_delivery(self, delivery_id, **kwargs):
+        body = self._parse_json_body()
+        service = self._get_delivery_service()
+        delivery = request.env['smart.delivery.order'].sudo().browse(delivery_id)
+        if not delivery.exists():
+            return self._json_response(error='Delivery not found', status=404)
+
+        try:
+            self._validate_customer_access(body, delivery)
+            service.cancel_delivery(delivery)
+            return self._json_response(
+                data=service.serialize_delivery(delivery)
+            )
+        except ValueError as exc:
+            return self._json_response(error=str(exc), status=400)
+        except Exception as exc:
+            _logger.exception('Cancel delivery failed')
             return self._json_response(error=str(exc), status=500)
 
     @http.route(

@@ -9,6 +9,7 @@
                 <field name="name"/>
                 <field name="phone"/>
                 <field name="is_active"/>
+                <field name="is_online"/>
                 <field name="active_delivery_count"/>
                 <field name="current_lat"/>
                 <field name="current_lng"/>
@@ -23,11 +24,16 @@
         <field name="arch" type="xml">
             <form string="Driver">
                 <sheet>
+                    <field name="profile_image"
+                           widget="image"
+                           class="oe_avatar"
+                           options="{'preview_image': 'profile_image'}"/>
                     <group>
                         <group>
                             <field name="name"/>
                             <field name="phone"/>
                             <field name="is_active"/>
+                            <field name="is_online"/>
                             <field name="user_id"/>
                         </group>
                         <group>

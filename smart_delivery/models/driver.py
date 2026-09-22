@@ -7,8 +7,14 @@ class SmartDriver(models.Model):
     _order = 'name'
 
     name = fields.Char(string='Driver Name', required=True)
+    profile_image = fields.Image(
+        string='Profile Picture',
+        max_width=256,
+        max_height=256,
+    )
     phone = fields.Char(string='Phone')
     is_active = fields.Boolean(string='Active', default=True)
+    is_online = fields.Boolean(string='Connected', default=False, readonly=True)
     current_lat = fields.Float(string='Current Latitude', digits=(10, 7))
     current_lng = fields.Float(string='Current Longitude', digits=(10, 7))
     last_location_time = fields.Datetime(string='Last Location Update', readonly=True)

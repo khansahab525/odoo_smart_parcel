@@ -83,6 +83,10 @@ class ApiBaseController(http.Controller):
 
     def _serialize_user(self, user):
         """Serialize user for API login response."""
+        driver_image = (
+            user.smart_driver_id.profile_image
+            if user.smart_driver_id else False
+        )
         return {
             'user_id': user.id,
             'name': user.name,
@@ -91,4 +95,9 @@ class ApiBaseController(http.Controller):
             'driver_id': user.smart_driver_id.id if user.smart_driver_id else None,
             'phone': user.smart_customer_phone or '',
             'email': user.email or '',
+            'driver_profile_image': (
+                driver_image.decode()
+                if isinstance(driver_image, bytes)
+                else (driver_image or '')
+            ),
         }
